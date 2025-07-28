@@ -1,7 +1,12 @@
 import click
 import pandas as pd
 import matplotlib.pyplot as plt
+import os
+import pickle
 from datetime import datetime
+
+# Path for temporary file to store DataFrame
+TEMP_FILE = "temp_data.pkl"
 
 def load_data(file_path):
     """Load CSV or JSON file into a pandas DataFrame."""
@@ -25,6 +30,28 @@ def load_data(file_path):
         click.echo(f"Error loading file: {str(e)}")
         return None
 
+def save_data(df):
+    """Save DataFrame to a temporary pickle file."""
+    try:
+        with open(TEMP_FILE, 'wb') as f:
+            pickle.dump(df, f)
+        return True
+    except Exception as e:
+        click.echo(f"Error saving data: {str(e)}")
+        return False
+
+def get_data():
+    """Load DataFrame from temporary pickle file."""
+    if not os.path.exists(TEMP_FILE):
+        click.echo("No data loaded. Please run 'parse <file>' first.")
+        return None
+    try:
+        with open(TEMP_FILE, 'rb') as f:
+            return pickle.load(f)
+    except Exception as e:
+        click.echo(f"Error loading saved data: {str(e)}")
+        return None
+
 @click.group()
 def cli():
     """CLI tool for analyzing bank statements and expenses."""
@@ -33,16 +60,16 @@ def cli():
 @cli.command()
 @click.argument('file', type=click.Path(exists=True))
 def parse(file):
-    """Parse and display the first few rows of a CSV/JSON bank statement."""
+    """Parse and load a CSV/JSON bank statement into memory."""
     df = load_data(file)
     if df is not None:
-        click.echo(f"Parsed data:\n{df.head().to_string()}")
+        if save_data(df):
+            click.echo(f"Data loaded successfully from {file}:\n{df.head().to_string()}")
 
 @cli.command()
-@click.argument('file', type=click.Path(exists=True))
-def summary(file):
+def summary():
     """Display summary of transactions."""
-    df = load_data(file)
+    df = get_data()
     if df is not None:
         total_transactions = len(df)
         total_inflow = df[df['amount'] > 0]['amount'].sum()
@@ -55,20 +82,18 @@ def summary(file):
                    f"Net Balance: ${net_balance:.2f}")
 
 @cli.command()
-@click.argument('file', type=click.Path(exists=True))
-def frequency(file):
+def frequency():
     """Show frequency of transactions by description."""
-    df = load_data(file)
+    df = get_data()
     if df is not None:
         freq = df['description'].value_counts()
         click.echo("Transaction Frequency by Description:\n")
         click.echo(freq.to_string())
 
 @cli.command()
-@click.argument('file', type=click.Path(exists=True))
-def net_flow(file):
+def net_flow():
     """Calculate net inflow and outflow."""
-    df = load_data(file)
+    df = get_data()
     if df is not None:
         inflow = df[df['amount'] > 0]['amount'].sum()
         outflow = df[df['amount'] < 0]['amount'].abs().sum()
@@ -77,12 +102,11 @@ def net_flow(file):
                    f"Outflow: ${outflow:.2f}")
 
 @cli.command()
-@click.argument('file', type=click.Path(exists=True))
 @click.option('--k', default=5, help='Number of top transactions to display')
 @click.option('--by', type=click.Choice(['amount', 'frequency']), default='amount', help='Sort by amount or frequency')
-def top_k(file, k, by):
+def top_k(k, by):
     """Display top k transactions by amount or frequency."""
-    df = load_data(file)
+    df = get_data()
     if df is not None:
         if by == 'amount':
             top_transactions = df[['description', 'amount']].nlargest(k, 'amount')
@@ -92,10 +116,9 @@ def top_k(file, k, by):
             click.echo(f"Top {k} Transactions by Frequency:\n{freq.to_string()}")
 
 @cli.command()
-@click.argument('file', type=click.Path(exists=True))
-def histogram(file):
+def histogram():
     """Generate and save a histogram of transaction amounts."""
-    df = load_data(file)
+    df = get_data()
     if df is not None:
         plt.figure(figsize=(10, 6))
         plt.hist(df['amount'], bins=20, edgecolor='black')
@@ -108,16 +131,17 @@ def histogram(file):
         click.echo(f"Histogram saved as {output_file}")
 
 @cli.command()
-@click.argument('file', type=click.Path(exists=True))
 @click.option('--period', type=click.Choice(['daily', 'monthly']), default='daily', help='Trend period (daily or monthly)')
-def trend(file, period):
+def trend(period):
     """Generate and save a trend plot of transactions over time."""
-    df = load_data(file)
+    df = get_data()
     if df is not None:
         if period == 'daily':
+            df = df.copy()
             df['date_trunc'] = df['date'].dt.date
             trend_data = df.groupby('date_trunc')['amount'].sum()
         else:  # monthly
+            df = df.copy()
             df['date_trunc'] = df['date'].dt.to_period('M').dt.to_timestamp()
             trend_data = df.groupby('date_trunc')['amount'].sum()
         
@@ -132,6 +156,18 @@ def trend(file, period):
         plt.savefig(output_file)
         plt.close()
         click.echo(f"Trend plot saved as {output_file}")
+
+@cli.command()
+def end():
+    """Discard the loaded data."""
+    if os.path.exists(TEMP_FILE):
+        try:
+            os.remove(TEMP_FILE)
+            click.echo("Loaded data has been discarded.")
+        except Exception as e:
+            click.echo(f"Error discarding data: {str(e)}")
+    else:
+        click.echo("No data loaded to discard.")
 
 if __name__ == '__main__':
     cli()
